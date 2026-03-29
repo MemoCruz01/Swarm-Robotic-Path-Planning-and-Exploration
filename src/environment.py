@@ -48,6 +48,28 @@ class Environment:
         self.target_x = target_x if target_x is not None else width - 10
         self.target_y = target_y if target_y is not None else height - 10
         self.visited_regions = set()  # Track explored regions
+        
+        # Phase 4: Environment Complexity
+        self.terrain_system = None
+        self.dynamic_obstacles = None
+        self.phase4_enabled = False
+        
+        # Initialize Phase 4 systems if enabled
+        try:
+            from config.realism_settings import ENABLE_PHASE4_ENVIRONMENT, TERRAIN_ENABLED, DYNAMIC_OBSTACLES
+            if ENABLE_PHASE4_ENVIRONMENT:
+                self.phase4_enabled = True
+                
+                if TERRAIN_ENABLED:
+                    from .terrain_system import TerrainSystem
+                    self.terrain_system = TerrainSystem(width, height)
+                
+                if DYNAMIC_OBSTACLES:
+                    from .dynamic_obstacles import DynamicObstacleManager
+                    self.dynamic_obstacles = DynamicObstacleManager(width, height)
+        except Exception as e:
+            # Phase 4 not available (missing dependencies)
+            pass
     
     def is_valid_position(self, x: float, y: float, safety_radius: float = 0.0) -> bool:
         """
@@ -130,3 +152,84 @@ class Environment:
         if total_regions == 0:
             return 0.0
         return min(100.0, (len(self.visited_regions) / total_regions) * 100)
+    
+    def check_robot_collisions(self, robots: List, 
+                               robot_radius: float = 1.0,
+                               elasticity: float = 0.7,
+                               separation_speed: float = 0.3) -> int:
+        """
+        Detect and resolve all robot-robot collisions.
+        
+        Args:
+            robots: List of robot objects
+            robot_radius: Radius of each robot for collision detection
+            elasticity: Bounce factor (0=stick, 0.7=bounce, 1.0=perfect)
+            separation_speed: Factor for separation force
+            
+        Returns:
+            Number of collisions resolved
+        """
+        collision_count = 0
+        collision_distance = 2.0 * robot_radius
+        
+        # Check all pairs of robots
+        for i in range(len(robots)):
+            for j in range(i + 1, len(robots)):
+                robot1 = robots[i]
+                robot2 = robots[j]
+                
+                # Calculate distance between robot centers
+                dx = robot2.x - robot1.x
+                dy = robot2.y - robot1.y
+                dist = np.sqrt(dx**2 + dy**2)
+                
+                # Check if collision
+                if dist < collision_distance and dist > 0:
+                    collision_count += 1
+                    
+                    # Resolve collision
+                    self._resolve_robot_collision(
+                        robot1, robot2, dx, dy, dist,
+                        collision_distance, elasticity, separation_speed
+                    )
+        
+        return collision_count
+    
+    def _resolve_robot_collision(self, robot1, robot2, 
+                                 dx: float, dy: float, 
+                                 dist: float,
+                                 collision_distance: float,
+                                 elasticity: float = 0.7,
+                                 separation_speed: float = 0.3):
+        """
+        Resolve a single collision between two robots.
+        
+        Args:
+            robot1: First robot
+            robot2: Second robot
+            dx: Relative x position (robot2 - robot1)
+            dy: Relative y position (robot2 - robot1)
+            dist: Distance between centers
+            collision_distance: Threshold for collision
+            elasticity: Bounce factor
+            separation_speed: Separation force scale
+        """
+        # Normal vector (pointing from robot1 to robot2)
+        normal_x = dx / dist
+        normal_y = dy / dist
+        
+        # Separation: push robots apart
+        overlap = collision_distance - dist
+        separation = overlap * separation_speed / 2.0
+        
+        robot1.x -= normal_x * separation
+        robot1.y -= normal_y * separation
+        robot2.x += normal_x * separation
+        robot2.y += normal_y * separation
+        
+        # Velocity response: bouncy reflection
+        # Reverse velocities with elasticity dampening
+        robot1.v_left *= -elasticity
+        robot1.v_right *= -elasticity
+        robot2.v_left *= -elasticity
+        robot2.v_right *= -elasticity

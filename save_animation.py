@@ -1,5 +1,6 @@
 """
 Save swarm robotics simulation as video file (MP4 and GIF).
+Each run creates a unique timestamped file, allowing evolution tracking.
 """
 
 import numpy as np
@@ -7,10 +8,87 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import matplotlib.patches as patches
 import os
+from datetime import datetime
 
 from config.settings import *
+from config.realism_settings import (
+    ENABLE_PHASE2_INTERACTION,
+    ROBOT_COLLISIONS_ENABLED,
+    COLLISION_ELASTICITY,
+    ROBOT_RADIUS,
+    COMMUNICATION_RANGE_ENABLED,
+    COMMUNICATION_RANGE,
+    ENABLE_PHASE3_NAVIGATION,
+    USE_DWA,
+    DWA_PREDICTION_STEPS,
+)
 from src.environment import Environment, Obstacle
 from src.swarm import RobotSwarm
+
+
+def get_phase2_stats(swarm):
+    """
+    Calculate Phase 2 robot interaction metrics.
+    
+    Returns:
+        Dictionary with collision and communication statistics
+    """
+    if not ENABLE_PHASE2_INTERACTION:
+        return None
+    
+    positions = swarm.get_robot_positions()
+    if not positions or len(positions) < 2:
+        return {
+            'min_spacing': 999.0,
+            'avg_spacing': 999.0,
+            'collision_threshold': 2 * ROBOT_RADIUS,
+            'avg_communication_neighbors': 0,
+            'communication_pairs': 0,
+            'active_collision': False
+        }
+    
+    # Calculate min and avg spacing between all robot pairs
+    distances = []
+    collision_threshold = 2 * ROBOT_RADIUS
+    
+    for i in range(len(positions)):
+        for j in range(i + 1, len(positions)):
+            dx = positions[i][0] - positions[j][0]
+            dy = positions[i][1] - positions[j][1]
+            dist = np.sqrt(dx*dx + dy*dy)
+            distances.append(dist)
+    
+    min_spacing = min(distances) if distances else 999.0
+    avg_spacing = np.mean(distances) if distances else 999.0
+    
+    # Calculate communication metrics
+    avg_neighbors = 0
+    communication_pairs = 0
+    
+    if COMMUNICATION_RANGE_ENABLED:
+        for i in range(len(positions)):
+            neighbor_count = 0
+            for j in range(len(positions)):
+                if i != j:
+                    dx = positions[i][0] - positions[j][0]
+                    dy = positions[i][1] - positions[j][1]
+                    dist = np.sqrt(dx*dx + dy*dy)
+                    if dist <= COMMUNICATION_RANGE:
+                        neighbor_count += 1
+                        communication_pairs += 1
+            avg_neighbors += neighbor_count
+        
+        avg_neighbors = avg_neighbors / len(positions) if positions else 0
+        communication_pairs = communication_pairs // 2  # Each pair counted twice
+    
+    return {
+        'min_spacing': min_spacing,
+        'avg_spacing': avg_spacing,
+        'collision_threshold': collision_threshold,
+        'avg_communication_neighbors': avg_neighbors,
+        'communication_pairs': communication_pairs,
+        'active_collision': min_spacing < (collision_threshold * 1.2)
+    }
 
 
 def create_environment() -> Environment:
@@ -46,18 +124,165 @@ def create_environment() -> Environment:
     return env
 
 
-def save_animation_video(output_file="swarm_simulation.gif", fps=20, save_mp4=True):
+def get_phase2_stats(swarm):
     """
-    Save swarm simulation as video file.
+    Calculate Phase 2 robot interaction metrics.
+    
+    Returns:
+        Dictionary with collision and communication statistics
+    """
+    if not ENABLE_PHASE2_INTERACTION:
+        return None
+    
+    positions = swarm.get_robot_positions()
+    if not positions or len(positions) < 2:
+        return {
+            'min_spacing': 999.0,
+            'avg_spacing': 999.0,
+            'collision_threshold': 2 * ROBOT_RADIUS,
+            'avg_communication_neighbors': 0,
+            'communication_pairs': 0,
+            'active_collision': False
+        }
+    
+    # Calculate min and avg spacing between all robot pairs
+    distances = []
+    collision_threshold = 2 * ROBOT_RADIUS
+    
+    for i in range(len(positions)):
+        for j in range(i + 1, len(positions)):
+            dx = positions[i][0] - positions[j][0]
+            dy = positions[i][1] - positions[j][1]
+            dist = np.sqrt(dx*dx + dy*dy)
+            distances.append(dist)
+    
+    min_spacing = min(distances) if distances else 999.0
+    avg_spacing = np.mean(distances) if distances else 999.0
+    
+    # Calculate communication metrics
+    avg_neighbors = 0
+    communication_pairs = 0
+    
+    if COMMUNICATION_RANGE_ENABLED:
+        for i in range(len(positions)):
+            neighbor_count = 0
+            for j in range(len(positions)):
+                if i != j:
+                    dx = positions[i][0] - positions[j][0]
+                    dy = positions[i][1] - positions[j][1]
+                    dist = np.sqrt(dx*dx + dy*dy)
+                    if dist <= COMMUNICATION_RANGE:
+                        neighbor_count += 1
+                        communication_pairs += 1
+            avg_neighbors += neighbor_count
+        
+        avg_neighbors = avg_neighbors / len(positions) if positions else 0
+        communication_pairs = communication_pairs // 2  # Each pair counted twice
+    
+    return {
+        'min_spacing': min_spacing,
+        'avg_spacing': avg_spacing,
+        'collision_threshold': collision_threshold,
+        'avg_communication_neighbors': avg_neighbors,
+        'communication_pairs': communication_pairs,
+        'active_collision': min_spacing < (collision_threshold * 1.2)
+    }
+
+
+def get_phase3_stats(swarm):
+    """
+    Calculate Phase 3 DWA navigation metrics.
+    
+    Returns:
+        Dictionary with DWA planning statistics
+    """
+    if not (ENABLE_PHASE3_NAVIGATION and USE_DWA):
+        return None
+    
+    if not swarm.dwa_planners:
+        return None
+    
+    # Aggregate DWA planner state (smoothness level)
+    total_smoothing = sum(p.last_heading for p in swarm.dwa_planners)
+    avg_smoothing = total_smoothing / len(swarm.dwa_planners) if swarm.dwa_planners else 0
+    
+    # Count robots with significant velocity (actively planning)
+    active_robots = 0
+    velocities = swarm.get_robot_velocities()
+    for vx, vy in velocities:
+        if np.sqrt(vx**2 + vy**2) > 0.1:
+            active_robots += 1
+    
+    return {
+        'dwa_planners_active': len(swarm.dwa_planners),
+        'prediction_steps': DWA_PREDICTION_STEPS,
+        'actively_navigating_robots': active_robots,
+        'avg_heading_angle': avg_smoothing,
+    }
+
+
+def get_phase4_stats(environment):
+    """
+    Calculate Phase 4 environment complexity metrics.
+    
+    Returns:
+        Dictionary with terrain and dynamic obstacle statistics
+    """
+    stats = {}
+    
+    # Terrain system metrics
+    if environment.terrain_system is not None:
+        terrain_stats = environment.terrain_system.get_statistics()
+        stats['terrain_zones'] = terrain_stats['total_zones']
+        stats['friction_zones'] = terrain_stats['friction_zones']
+        stats['slippy_zones'] = terrain_stats['slippy_zones']
+    else:
+        stats['terrain_zones'] = 0
+        stats['friction_zones'] = 0
+        stats['slippy_zones'] = 0
+    
+    # Dynamic obstacles metrics
+    if environment.dynamic_obstacles is not None:
+        active_obstacles = len(environment.dynamic_obstacles.obstacles)
+        stats['active_obstacles'] = active_obstacles
+        stats['total_spawned'] = environment.dynamic_obstacles.next_id
+    else:
+        stats['active_obstacles'] = 0
+        stats['total_spawned'] = 0
+    
+    return stats
+
+
+def generate_unique_filename(base_name: str = "swarm_simulation") -> str:
+    """
+    Generate a unique filename with timestamp.
     
     Args:
-        output_file: Output filename (without extension for multiple formats)
+        base_name: Base filename without extension
+        
+    Returns:
+        Filename with timestamp: base_name_YYYY-MM-DD_HHMMSS
+    """
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    return f"{base_name}_{timestamp}"
+
+
+def save_animation_video(output_file=None, fps=20, save_mp4=True):
+    """
+    Save swarm simulation as video file with unique timestamped filename.
+    
+    Args:
+        output_file: Output filename (without extension). If None, generates unique timestamp-based name
         fps: Frames per second
         save_mp4: Also try to save as MP4 (requires ffmpeg)
     """
     
+    # Generate unique filename if not provided
+    if output_file is None:
+        output_file = generate_unique_filename("swarm_simulation")
+    
     print("=" * 70)
-    print("SWARM ROBOTICS - VIDEO SAVING MODE")
+    print("SWARM ROBOTICS - VIDEO SAVING MODE WITH PHASE 1 & 2 & 3 METRICS")
     print("=" * 70)
     print(f"\nConfiguration:")
     print(f"  Environment: {ENVIRONMENT_WIDTH}x{ENVIRONMENT_HEIGHT}")
@@ -66,9 +291,9 @@ def save_animation_video(output_file="swarm_simulation.gif", fps=20, save_mp4=Tr
     print(f"  Target Position: ({TARGET_X}, {TARGET_Y})")
     print(f"\nVideo Settings:")
     print(f"  FPS: {fps}")
-    print(f"  Output: {output_file}.gif")
+    print(f"  Output GIF: outputs/animations/{output_file}.gif")
     if save_mp4:
-        print(f"  Also attempting: {output_file}.mp4")
+        print(f"  Output MP4: outputs/videos/{output_file}.mp4")
     print()
     
     # Create environment and swarm
@@ -83,7 +308,7 @@ def save_animation_video(output_file="swarm_simulation.gif", fps=20, save_mp4=Tr
     ax.set_xlim(0, ENVIRONMENT_WIDTH)
     ax.set_ylim(0, ENVIRONMENT_HEIGHT)
     ax.set_aspect('equal')
-    ax.set_title('Swarm Robotics - Path Planning and Exploration', 
+    ax.set_title('Swarm Robotics - Phase 1, 2 & 3 (DWA Navigation)', 
                 fontsize=14, fontweight='bold')
     ax.set_xlabel('X Position', fontsize=11)
     ax.set_ylabel('Y Position', fontsize=11)
@@ -123,8 +348,8 @@ def save_animation_video(output_file="swarm_simulation.gif", fps=20, save_mp4=Tr
     
     # Text info
     info_text = ax.text(0.02, 0.98, '', transform=ax.transAxes,
-                       fontsize=9, verticalalignment='top',
-                       bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8),
+                       fontsize=8, verticalalignment='top',
+                       bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.85),
                        family='monospace')
     
     # Legend
@@ -175,6 +400,7 @@ def save_animation_video(output_file="swarm_simulation.gif", fps=20, save_mp4=Tr
         
         # Update info text
         info_str = (
+            f"[PHASE 1] [PHASE 2] [PHASE 3 DWA]\n"
             f"Iteration: {step_data['iteration']:3d}  |  "
             f"Fitness: {step_data['best_fitness']:7.2f}  |  "
             f"Coverage: {step_data['exploration_coverage']:5.1f}%  |  "
@@ -184,8 +410,37 @@ def save_animation_video(output_file="swarm_simulation.gif", fps=20, save_mp4=Tr
             f"Position: ({center_x:6.1f}, {center_y:6.1f})"
         )
         
+        # Add Phase 2 metrics if enabled
+        if ENABLE_PHASE2_INTERACTION:
+            phase2_stats = get_phase2_stats(swarm)
+            if phase2_stats:
+                info_str += f"\n[PHASE 2: INTERACTIONS] "
+                info_str += f"Spacing: {phase2_stats['min_spacing']:.2f}u | "
+                if phase2_stats['active_collision']:
+                    info_str += f"⚠ COLLISION | "
+                info_str += f"Comm: {phase2_stats['communication_pairs']} pairs"
+        
+        # Add Phase 3 metrics if enabled
+        if ENABLE_PHASE3_NAVIGATION and USE_DWA:
+            phase3_stats = get_phase3_stats(swarm)
+            if phase3_stats:
+                info_str += f"\n[PHASE 3: DWA] "
+                info_str += f"Planners: {phase3_stats['dwa_planners_active']} | "
+                info_str += f"Active: {phase3_stats['actively_navigating_robots']}/{NUM_ROBOTS} | "
+                info_str += f"Prediction: {phase3_stats['prediction_steps']} steps"
+        
+        # Add Phase 4 metrics if enabled
+        if swarm.environment.phase4_enabled:
+            phase4_stats = get_phase4_stats(swarm.environment)
+            if phase4_stats:
+                info_str += f"\n[PHASE 4: ENVIRONMENT] "
+                info_str += f"Terrain: {phase4_stats['terrain_zones']} zones "
+                info_str += f"({phase4_stats['friction_zones']}F/{phase4_stats['slippy_zones']}S) | "
+                info_str += f"Obstacles: {phase4_stats['active_obstacles']}/{phase4_stats['total_spawned']}"
+        
+        
         if step_data['target_found']:
-            info_str += "  |  ✓ TARGET FOUND!"
+            info_str += "\n\n✓ TARGET FOUND!"
             ax.set_title('✓ TARGET FOUND! - Swarm Robotics Path Planning and Exploration', 
                         fontsize=14, fontweight='bold', color='green')
         
@@ -216,29 +471,33 @@ def save_animation_video(output_file="swarm_simulation.gif", fps=20, save_mp4=Tr
         repeat=False
     )
     
+    # Ensure output directories exist
+    os.makedirs("outputs/animations", exist_ok=True)
+    os.makedirs("outputs/videos", exist_ok=True)
+    
     # Save as GIF
     print("\n" + "=" * 70)
     print("SAVING ANIMATION...")
     print("=" * 70)
     
-    gif_file = f"{output_file}.gif"
-    print(f"\nSaving GIF: {gif_file}")
+    gif_file = f"outputs/animations/{output_file}.gif"
+    print(f"\nSaving GIF: outputs/animations/{output_file}.gif")
     print("(This may take a few minutes for smooth animation...)")
     
     try:
         anim.save(gif_file, writer='pillow', fps=fps, dpi=80)
-        print(f"✓ GIF saved successfully: {gif_file}")
+        print(f"✓ GIF saved successfully!")
         print(f"  File size: {os.path.getsize(gif_file) / (1024*1024):.1f} MB")
     except Exception as e:
         print(f"✗ Failed to save GIF: {e}")
     
     # Try to save as MP4 if ffmpeg available
     if save_mp4:
-        mp4_file = f"{output_file}.mp4"
-        print(f"\nSaving MP4: {mp4_file}")
+        mp4_file = f"outputs/videos/{output_file}.mp4"
+        print(f"\nSaving MP4: outputs/videos/{output_file}.mp4")
         try:
             anim.save(mp4_file, writer='ffmpeg', fps=fps, dpi=80)
-            print(f"✓ MP4 saved successfully: {mp4_file}")
+            print(f"✓ MP4 saved successfully!")
             print(f"  File size: {os.path.getsize(mp4_file) / (1024*1024):.1f} MB")
         except Exception as e:
             print(f"✗ MP4 not saved (ffmpeg may not be installed)")
@@ -260,15 +519,15 @@ def save_animation_video(output_file="swarm_simulation.gif", fps=20, save_mp4=Tr
         print(f"Swarm Spread: {swarm.get_swarm_spread():.2f}")
         print("=" * 70)
         
-        print(f"\n✓ Video saved! You can find it in the project directory:")
-        print(f"  {os.path.abspath(gif_file)}")
+        print(f"\n✓ Video saved! You can find it in the outputs folder:")
+        print(f"  📁 GIF:  outputs/animations/{output_file}.gif")
         if save_mp4:
-            print(f"  {os.path.abspath(mp4_file)}")
+            print(f"  📁 MP4:  outputs/videos/{output_file}.mp4")
 
 
 if __name__ == "__main__":
     save_animation_video(
-        output_file="swarm_simulation",
         fps=10,  # 10 FPS for smooth video
         save_mp4=True  # Try to save MP4 as well
+        # output_file will be auto-generated with timestamp
     )

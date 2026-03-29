@@ -124,6 +124,9 @@ class SwarmVisualizer:
                 xs, ys, c='blue', s=100, alpha=0.6,
                 label='Robots', zorder=5
             )
+            
+            # Draw robot orientation arrows (if using differential drive)
+            self._draw_robot_headings(xs, ys)
         
         # Plot velocities as quiver (optional, can be disabled for clarity)
         velocities = self.swarm.get_robot_velocities()
@@ -143,6 +146,31 @@ class SwarmVisualizer:
         self._update_info_panel(step_data)
         
         return self.robot_scatter, self.velocity_quiver
+    
+    def _draw_robot_headings(self, xs: tuple, ys: tuple, arrow_length: float = 2.0):
+        """
+        Draw orientation arrows for robots showing heading direction.
+        
+        Args:
+            xs: X positions
+            ys: Y positions
+            arrow_length: Length of heading arrow
+        """
+        try:
+            for robot in self.swarm.robots:
+                if hasattr(robot, 'get_heading'):  # Differential drive robot
+                    heading = robot.get_heading()
+                    dx = arrow_length * np.cos(heading)
+                    dy = arrow_length * np.sin(heading)
+                    
+                    self.ax_main.arrow(
+                        robot.x, robot.y, dx, dy,
+                        head_width=0.5, head_length=0.3,
+                        fc='darkblue', ec='darkblue', alpha=0.7, zorder=5
+                    )
+        except:
+            pass  # Skip if not available
+
     
     def _update_info_panel(self, step_data: dict):
         """Update information text panel."""

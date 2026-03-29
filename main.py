@@ -52,6 +52,21 @@ def create_environment() -> Environment:
         target_y=TARGET_Y
     )
     
+    # Initialize Phase 4 features if enabled
+    if env.phase4_enabled:
+        if env.terrain_system is not None:
+            # Create random terrain zones
+            env.terrain_system.create_random_terrain(num_friction=3, num_slippy=1)
+            terrain_stats = env.terrain_system.get_statistics()
+            print(f"  ✓ Created {terrain_stats['total_zones']} terrain zones")
+        
+        if env.dynamic_obstacles is not None:
+            # Spawn initial dynamic obstacles
+            from config.realism_settings import DYNAMIC_OBSTACLE_COUNT
+            for _ in range(DYNAMIC_OBSTACLE_COUNT):
+                env.dynamic_obstacles.spawn_random_obstacle(min_distance=40)
+            print(f"  ✓ Spawned {len(env.dynamic_obstacles.obstacles)} dynamic obstacles")
+    
     return env
 
 
