@@ -24,6 +24,7 @@ Thumbs.db
 .env
 
 # Project specific
-*.gif
-*.mp4
+# Animation and video files are now tracked
+# *.gif
+# *.mp4
 .ipynb_checkpoints/
